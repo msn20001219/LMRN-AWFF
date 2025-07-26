@@ -1,0 +1,45 @@
+import numpy as np
+from sklearn.decomposition import PCA
+from sklearn.preprocessing import StandardScaler
+
+def compute_feature_variance(pc_matrix):
+    return np.mean(np.var(pc_matrix, axis=0))
+
+def compute_distribution_entropy(pc_matrix, eps=1e-8):
+    probs = np.abs(pc_matrix) / (np.sum(np.abs(pc_matrix), axis=0, keepdims=True) + eps)
+    entropy = -np.sum(probs * np.log(probs + eps), axis=0)
+    return np.mean(entropy)
+
+def normalize_metric(x):
+    x_min = np.min(x)
+    x_max = np.max(x)
+    return (x - x_min) / (x_max - x_min + 1e-8)
+
+def adaptive_weighted_feature_fusion(X1, X2, n_pc1=10, n_pc2=10, alpha=0.5):
+    scaler1 = StandardScaler()
+    scaler2 = StandardScaler()
+    X1_scaled = scaler1.fit_transform(X1)
+    X2_scaled = scaler2.fit_transform(X2)
+
+    pca1 = PCA(n_components=n_pc1)
+    pca2 = PCA(n_components=n_pc2)
+    PC1 = pca1.fit_transform(X1_scaled)
+    PC2 = pca2.fit_transform(X2_scaled)
+
+    var1 = compute_feature_variance(PC1)
+    var2 = compute_feature_variance(PC2)
+
+    ent1 = compute_distribution_entropy(PC1)
+    ent2 = compute_distribution_entropy(PC2)
+
+    var_norm = normalize_metric(np.array([var1, var2]))
+    ent_norm = normalize_metric(np.array([ent1, ent2]))
+
+    score = alpha * var_norm + (1 - alpha) * ent_norm
+    weight = score / (np.sum(score) + 1e-8)
+
+    PC1_weighted = PC1 * weight[0]
+    PC2_weighted = PC2 * weight[1]
+
+    fused_feature = np.concatenate([PC1_weighted, PC2_weighted], axis=1)
+    return fused_feature, weight, PC1, PC2
