@@ -1,0 +1,119 @@
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+import torch.optim as optim
+import numpy as np
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import r2_score, mean_squared_error
+from sklearn.preprocessing import StandardScaler
+from torch.utils.data import TensorDataset, DataLoader
+
+class MultiScaleResBlock(nn.Module):
+    def __init__(self, in_channels, out_channels, kernel_sizes=[3, 5, 7]):
+        super().__init__()
+        self.branches = nn.ModuleList([
+            nn.Sequential(
+                nn.Conv1d(in_channels, out_channels, kernel_size=k, padding=k // 2),
+                nn.BatchNorm1d(out_channels),
+                nn.ReLU()
+            ) for k in kernel_sizes
+        ])
+        self.proj = nn.Conv1d(in_channels, out_channels * len(kernel_sizes), kernel_size=1) \
+            if in_channels != out_channels * len(kernel_sizes) else nn.Identity()
+
+    def forward(self, x):
+        feats = [branch(x) for branch in self.branches]
+        merged = torch.cat(feats, dim=1)
+        residual = self.proj(x)
+        return merged + residual
+
+class LMRN(nn.Module):
+    def __init__(self, input_dim, output_dim=3):
+        super().__init__()
+        self.encoder = nn.Linear(input_dim, 64)
+        self.block = MultiScaleResBlock(1, 16)
+        self.pool = nn.AdaptiveAvgPool1d(1)
+        self.fc = nn.Sequential(
+            nn.Flatten(),
+            nn.Linear(96, 64),
+            nn.ReLU(),
+            nn.Dropout(0.2),
+            nn.Linear(64, output_dim)
+        )
+
+    def forward(self, x):
+        x = self.encoder(x)
+        x = x.unsqueeze(1)
+        x = self.block(x)
+        x = self.pool(x)
+        x = self.fc(x)
+        return x
+
+def evaluate_model(model, loader, scaler_y):
+    model.eval()
+    y_true_list, y_pred_list = [], []
+    with torch.no_grad():
+        for X_batch, y_batch in loader:
+            preds = model(X_batch)
+            y_true_list.append(y_batch.numpy())
+            y_pred_list.append(preds.numpy())
+    y_true = np.vstack(y_true_list)
+    y_pred = np.vstack(y_pred_list)
+    y_true = scaler_y.inverse_transform(y_true)
+    y_pred = scaler_y.inverse_transform(y_pred)
+    r2 = r2_score(y_true, y_pred)
+    rmse = mean_squared_error(y_true, y_pred, squared=False)
+    return r2, rmse
+
+def train_lmrn_model(X, y, n_runs=5, batch_size=64, epochs=500, lr=0.001):
+    scaler_x = StandardScaler()
+    scaler_y = StandardScaler()
+    X_scaled = scaler_x.fit_transform(X)
+    y_scaled = scaler_y.fit_transform(y)
+
+    X_train, X_test, y_train, y_test = train_test_split(X_scaled, y_scaled, test_size=0.2, random_state=42)
+
+    X_train_tensor = torch.tensor(X_train, dtype=torch.float32)
+    X_test_tensor = torch.tensor(X_test, dtype=torch.float32)
+    y_train_tensor = torch.tensor(y_train, dtype=torch.float32)
+    y_test_tensor = torch.tensor(y_test, dtype=torch.float32)
+
+    train_loader = DataLoader(TensorDataset(X_train_tensor, y_train_tensor), batch_size=batch_size, shuffle=True)
+    test_loader = DataLoader(TensorDataset(X_test_tensor, y_test_tensor), batch_size=batch_size, shuffle=False)
+
+    r2_list = []
+    rmse_list = []
+
+    for run in range(n_runs):
+        model = LMRN(input_dim=X.shape[1], output_dim=y.shape[1])
+        optimizer = optim.Adam(model.parameters(), lr=lr)
+        criterion = nn.MSELoss()
+
+        model.train()
+        for epoch in range(epochs):
+            for X_batch, y_batch in train_loader:
+                optimizer.zero_grad()
+                preds = model(X_batch)
+                loss = criterion(preds, y_batch)
+                loss.backward()
+                optimizer.step()
+
+        r2, rmse = evaluate_model(model, test_loader, scaler_y)
+        r2_list.append(r2)
+        rmse_list.append(rmse)
+        print(f'Run {run+1}: R² = {r2:.4f}, RMSE = {rmse:.4f}')
+
+    print('===========================')
+    print('Average R²: {:.4f}'.format(np.mean(r2_list)))
+    print('Average RMSE: {:.4f}'.format(np.mean(rmse_list)))
+    return np.mean(r2_list), np.mean(rmse_list)
+
+# Example usage
+import pandas as pd
+X_nir = pd.read_csv('./NIR.csv', header=None).values
+X_raman = pd.read_csv('./Raman.csv', header=None).values
+y = pd.read_csv('./Y.csv', header=None).values
+
+X_fused = np.concatenate([X_nir, X_raman], axis=1)
+
+train_lmrn_model(X_fused, y)
