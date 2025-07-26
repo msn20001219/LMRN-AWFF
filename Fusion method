@@ -1,0 +1,22 @@
+import pandas as pd
+import numpy as np
+from sklearn.preprocessing import MinMaxScaler, StandardScaler
+from sklearn.decomposition import PCA
+
+nir = pd.read_csv('./NIR.csv', header=None).values
+raman = pd.read_csv('./Raman.csv', header=None).values
+
+scaler_minmax = MinMaxScaler()
+nir_norm = scaler_minmax.fit_transform(nir)
+raman_norm = scaler_minmax.fit_transform(raman)
+fusion_raw = np.concatenate([nir_norm, raman_norm], axis=1)
+
+scaler_std = StandardScaler()
+nir_std = scaler_std.fit_transform(nir)
+raman_std = scaler_std.fit_transform(raman)
+
+pca_nir = PCA(n_components=100)
+pca_raman = PCA(n_components=100)
+nir_pca = pca_nir.fit_transform(nir_std)
+raman_pca = pca_raman.fit_transform(raman_std)
+fusion_pca = np.concatenate([nir_pca, raman_pca], axis=1)
