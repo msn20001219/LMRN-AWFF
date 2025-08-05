@@ -15,7 +15,7 @@ def normalize_metric(x):
     x_max = np.max(x)
     return (x - x_min) / (x_max - x_min + 1e-8)
 
-def adaptive_weighted_feature_fusion(X1, X2, n_pc1=10, n_pc2=10, alpha=0.5):
+def adaptive_weighted_feature_fusion(X1, X2, n_pc1=100, n_pc2=100, alpha=0.5):
     scaler1 = StandardScaler()
     scaler2 = StandardScaler()
     X1_scaled = scaler1.fit_transform(X1)
